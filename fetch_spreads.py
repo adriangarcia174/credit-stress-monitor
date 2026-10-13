@@ -37,6 +37,21 @@ DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spreads.js
 TODAY = date.today().isoformat()
 
 
+def fetch_one(page, sid):
+    url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + sid
+    try:
+        # Usually FRED serves the CSV as a file download...
+        with page.expect_download(timeout=30000) as dl_info:
+            page.goto(url, timeout=30000)
+        text = open(dl_info.value.path()).read()
+    except Exception:  # noqa: BLE001 - ...otherwise it renders as page text
+        page.goto(url, timeout=60000)
+        text = page.evaluate("() => document.body.innerText")
+    if "DATE," not in text:
+        raise RuntimeError("unexpected content")
+    return text
+
+
 def fetch_csv_texts(series_ids):
     """Fetch FRED CSVs via headless Chromium (see module docstring for why)."""
     from playwright.sync_api import sync_playwright
@@ -47,13 +62,8 @@ def fetch_csv_texts(series_ids):
             page = browser.new_page()
             page.goto("https://fred.stlouisfed.org/", timeout=90000)
             for sid in series_ids:
-                url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + sid
                 try:
-                    texts[sid] = page.evaluate("""async (url) => {
-                        const r = await fetch(url);
-                        if (!r.ok) throw new Error('HTTP ' + r.status);
-                        return await r.text();
-                    }""", url, timeout=90000)
+                    texts[sid] = fetch_one(page, sid)
                 except Exception as e:  # noqa: BLE001 - one bad series must not kill the run
                     print(f" - {sid}: browser fetch failed ({type(e).__name__}: {str(e)[:100]})")
         finally:
