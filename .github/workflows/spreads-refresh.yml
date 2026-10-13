@@ -19,6 +19,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Playwright Chromium
+        # FRED's CDN bot-gates non-browser HTTP clients from datacenter IPs,
+        # so the fetcher pulls the CSVs through a real headless Chromium.
+        run: |
+          pip install playwright
+          playwright install chromium --with-deps
+
       - name: Fetch spreads from FRED
         run: python fetch_spreads.py
 
