@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Credit Stress Monitor</title>
+<style>
+  :root {
+    --bg: #0b0e0f;
+    --panel: #141819;
+    --border: #242c2d;
+    --fg: #e8ecec;
+    --muted: #8f9a9b;
+    --ok: #3fd97c;
+    --bad: #f27070;
+    --warn: #f5b942;
+    --blue: #6aa8ff;
+    --serif: Georgia, 'Times New Roman', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-variant-numeric: tabular-nums; }
+  .clo { max-width: 1100px; margin: 0 auto; padding: 24px 20px 48px; }
+  .clo-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  .clo-title { font-family: var(--serif); font-weight: 400; font-size: 30px; margin: 0; }
+  .clo-take { color: var(--muted); font-size: 15px; margin: 6px 0 0; min-height: 1.4em; }
+  .clo-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .clo-asof { color: var(--muted); font-size: 12px; }
+  .clo-btn { font: inherit; font-size: 14px; color: var(--fg); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  .clo-btn:hover { border-color: var(--muted); }
+  .clo-btn:disabled { opacity: .5; cursor: default; }
+  .clo-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; min-width: 0; }
+  .clo-card h3 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+  .clo-card .clo-note { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .clo-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: 12px; margin-bottom: 12px; }
+  .clo-tile-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin: 0 0 6px; }
+  .clo-tile-num { font-family: var(--serif); font-weight: 400; font-size: 40px; line-height: 1.1; min-height: 1.1em; }
+  .clo-tile-sub { color: var(--muted); font-size: 12px; margin-top: 6px; min-height: 1.2em; line-height: 1.4; }
+  .clo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 12px; margin-bottom: 12px; }
+  .clo-chart { position: relative; min-height: 15rem; }
+  .clo-chart svg { display: block; width: 100%; height: auto; }
+  .clo-tip { position: absolute; pointer-events: none; display: none; background: #1e2425; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.5); padding: 6px 10px; font-size: 12px; white-space: nowrap; z-index: 5; }
+  .clo-tip .clo-tip-h { color: var(--muted); margin-bottom: 2px; }
+  .status-card { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .status-pill { flex: none; font-size: 15px; font-weight: 700; letter-spacing: .08em; padding: 8px 18px; border-radius: 999px; border: 2px solid; }
+  .status-pill.calm { color: var(--ok); border-color: var(--ok); background: rgba(63,217,124,.08); }
+  .status-pill.watch { color: var(--warn); border-color: var(--warn); background: rgba(245,185,66,.08); }
+  .status-pill.triggered { color: var(--bad); border-color: var(--bad); background: rgba(242,112,112,.10); }
+  .status-text { font-size: 15px; line-height: 1.5; }
+  .status-text small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .gauge-bar { position: relative; height: 14px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); margin: 12px 0 6px; overflow: hidden; }
+  .gauge-danger { position: absolute; top: 0; bottom: 0; right: 0; background: rgba(242,112,112,.35); }
+  .gauge-warnzone { position: absolute; top: 0; bottom: 0; background: rgba(245,185,66,.22); }
+  .gauge-marker { position: absolute; top: -2px; bottom: -2px; width: 3px; background: var(--fg); border-radius: 2px; box-shadow: 0 0 8px rgba(232,236,236,.8); }
+  .gauge-scale { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+  .clo table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .clo th, .clo td { padding: 6px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  .clo th { color: var(--muted); font-weight: 600; font-size: 11px; }
+  .clo th:first-child, .clo td:first-child { text-align: left; }
+  .clo td:first-child { font-weight: 600; }
+  .clo-up { color: var(--ok); }
+  .clo-dn { color: var(--bad); }
+  .clo tr:last-child td { border-bottom: 0; }
+  .clo-foot { color: var(--muted); font-size: 12px; margin: 10px 0 0; line-height: 1.5; }
+  .clo-src { color: var(--muted); font-size: 11px; margin-top: 16px; line-height: 1.6; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { display: inline-block; width: 18px; height: 3px; border-radius: 2px; }
+  .swatch.dash { height: 0; border-top: 2px dashed; width: 18px; }
+</style>
+</head>
+<body>
+<div class="clo">
+  <div class="clo-head">
+    <div>
+      <h1 class="clo-title">Credit stress monitor</h1>
+      <p class="clo-take" id="takeaway">&mdash;</p>
+    </div>
+    <div class="clo-tools">
+      <span class="clo-asof">Data as of <span id="data-asof">&mdash;</span></span>
+      <button class="clo-btn" id="btn-refresh" type="button">Refresh</button>
+      <span class="clo-asof" id="refresh-status"></span>
+    </div>
+  </div>
+
+  <div class="clo-card status-card">
+    <span class="status-pill calm" id="status-pill">CALM</span>
+    <div class="status-text"><span id="status-text">&mdash;</span>
+      <small>Triggers from Josh Wolfe (@wolfejosh), Oct 12 2026: CCC OAS &gt; 13% and HY OAS &gt; 3.5% = credit stress spreading to stocks. "Watch" = within 0.50pp (CCC) / 0.25pp (HY) of a trigger.</small>
+    </div>
+  </div>
+
+  <div class="clo-grid">
+    <div class="clo-card">
+      <p class="clo-tile-label">CCC OAS vs 13% trigger</p>
+      <div class="clo-tile-num" id="g-ccc-num">&mdash;</div>
+      <div class="gauge-bar" id="g-ccc-bar"></div>
+      <div class="gauge-scale" id="g-ccc-scale"></div>
+      <div class="clo-tile-sub" id="g-ccc-sub">&mdash;</div>
+    </div>
+    <div class="clo-card">
+      <p class="clo-tile-label">HY OAS vs 3.5% trigger</p>
+      <div class="clo-tile-num" id="g-hy-num">&mdash;</div>
+      <div class="gauge-bar" id="g-hy-bar"></div>
+      <div class="gauge-scale" id="g-hy-scale"></div>
+      <div class="clo-tile-sub" id="g-hy-sub">&mdash;</div>
+    </div>
+  </div>
+
+  <div class="clo-card" style="margin-bottom:12px">
+    <h3>Credit spreads — 2 years</h3>
+    <p class="clo-note">ICE BofA option-adjusted spreads. Dashed lines are Wolfe's trigger levels.</p>
+    <div class="clo-chart" id="chart1"><div class="clo-tip"></div></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#f27070"></i>CCC OAS</span>
+      <span><i class="swatch" style="background:#f5b942"></i>HY OAS</span>
+      <span><i class="swatch" style="background:#8f9a9b"></i>BBB OAS</span>
+      <span><i class="swatch dash" style="border-color:#f27070"></i>CCC trigger 13%</span>
+      <span><i class="swatch dash" style="border-color:#f5b942"></i>HY trigger 3.5%</span>
+    </div>
+  </div>
+
+  <div class="clo-card" style="margin-bottom:12px">
+    <h3>The divergence: stocks vs junk</h3>
+    <p class="clo-note">S&amp;P 500 (right axis) against CCC spreads (left axis). Wolfe's point: stocks near records while the junkiest bonds blow out.</p>
+    <div class="clo-chart" id="chart2"><div class="clo-tip"></div></div>
+    <div class="legend">
+      <span><i class="swatch" style="background:#6aa8ff"></i>S&amp;P 500</span>
+      <span><i class="swatch" style="background:#f27070"></i>CCC OAS</span>
+    </div>
+  </div>
+
+  <div class="clo-card" id="spread-table">
+    <h3>Latest readings</h3>
+    <table id="tbl">
+      <thead><tr>
+        <th>Series</th><th>Latest</th><th>As of</th><th>5-day</th><th>1-month</th><th>Trigger</th><th>Gap to trigger</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="clo-foot">Gap = trigger minus current (pp). Negative gap = trigger hit. 5-day / 1-month are percent changes in the spread level.</p>
+  </div>
+
+  <p class="clo-src" id="srcnote"></p>
+</div>
+
+<script>
+/*__EMBED__*/
+
+let SP = null; // spreads.json payload (or embedded fallback)
+
+/* ---------- Formatting ---------- */
+const _n2 = (v, d) => Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtPct = (v) => _n2(v, 2) + '%';
+const fmtPp = (v) => (v < 0 ? '\u2212' : '+') + Math.abs(v).toFixed(2) + 'pp';
+const fmtChg = (v) => v == null ? '\u2014' : (v < 0 ? '\u2212' : '+') + Math.abs(v * 100).toFixed(1) + '%';
+const fmtDate = (s) => { if (!s) return ''; const p = String(s).slice(0, 10).split('-'); return (+p[1]) + '/' + (+p[2]) + '/' + p[0]; };
+const fmtMon = (s) => { const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const p = String(s).slice(0,10).split('-'); return M[+p[1]-1] + " '" + p[0].slice(2); };
+const signClass = (v) => v == null ? '' : v > 0 ? 'clo-up' : v < 0 ? 'clo-dn' : '';
+const fmtGap = (g) => g == null ? '\u2014' : Math.abs(g).toFixed(2) + 'pp';
+
+/* ---------- SVG helpers ---------- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, parent) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+function niceScale(lo, hi, maxTicks) {
+  if (!(hi > lo)) hi = lo + 1;
+  const step0 = (hi - lo) / maxTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const norm = step0 / mag;
+  const step = (norm >= 5 ? 10 : norm >= 2 ? 5 : norm >= 1 ? 2 : 1) * mag;
+  return { lo: Math.floor(lo / step) * step, hi: Math.ceil(hi / step) * step, step: step };
+}
+
+/* ---------- Line charts ---------- */
+function drawLines(box, cfg) {
+  const tip = box.querySelector('.clo-tip');
+  box.querySelectorAll('svg').forEach((s) => s.remove());
+  const W = Math.max(320, box.clientWidth), H = 300;
+  const margin = { top: 10, right: cfg.dual ? 64 : 16, bottom: 26, left: 48 };
+  const svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, width: '100%' }, box);
+  const n = Math.max.apply(null, cfg.series.map((s) => s.data.length));
+  if (!n) return;
+  const dates = cfg.series[0].data.map((d) => d[0]);
+  const X = (i) => margin.left + (n === 1 ? 0.5 : i / (n - 1)) * (W - margin.left - margin.right);
+  const leftVals = [];
+  cfg.series.filter((s) => !s.right).forEach((s) => s.data.forEach((d) => leftVals.push(d[1])));
+  (cfg.hlines || []).filter((h) => !h.right).forEach((h) => leftVals.push(h.val));
+  const sc = niceScale(Math.min.apply(null, leftVals), Math.max.apply(null, leftVals), 6);
+  const Y = (v) => margin.top + (1 - (v - sc.lo) / (sc.hi - sc.lo)) * (H - margin.top - margin.bottom);
+  let Y2 = null, sc2 = null;
+  const rightSeries = cfg.series.filter((s) => s.right);
+  if (rightSeries.length) {
+    const rv = [];
+    rightSeries.forEach((s) => s.data.forEach((d) => rv.push(d[1])));
+    sc2 = niceScale(Math.min.apply(null, rv), Math.max.apply(null, rv), 6);
+    Y2 = (v) => margin.top + (1 - (v - sc2.lo) / (sc2.hi - sc2.lo)) * (H - margin.top - margin.bottom);
+  }
+  const axisY = H - margin.bottom;
+  for (let t = sc.lo; t <= sc.hi + 1e-9; t += sc.step) {
+    svgEl('line', { x1: margin.left, x2: W - margin.right, y1: Y(t), y2: Y(t), stroke: '#1d2324' }, svg);
+    const tx = svgEl('text', { x: margin.left - 6, y: Y(t), dy: '0.35em', 'text-anchor': 'end', 'font-size': 11, fill: '#8f9a9b' }, svg);
+    tx.textContent = cfg.fmtY(t);
+  }
+  if (sc2) {
+    for (let t = sc2.lo; t <= sc2.hi + 1e-9; t += sc2.step) {
+      const tx = svgEl('text', { x: W - margin.right + 6, y: Y2(t), dy: '0.35em', 'font-size': 11, fill: '#8f9a9b' }, svg);
+      tx.textContent = cfg.fmtY2(t);
+    }
+  }
+  const tickEvery = Math.max(1, Math.floor(n / 8));
+  for (let i = 0; i < n; i += tickEvery) {
+    const tx = svgEl('text', { x: X(i), y: axisY + 16, 'text-anchor': 'middle', 'font-size': 11, fill: '#8f9a9b' }, svg);
+    tx.textContent = fmtMon(dates[i]);
+  }
+  (cfg.hlines || []).forEach((h) => {
+    const yy = h.right ? Y2(h.val) : Y(h.val);
+    svgEl('line', { x1: margin.left, x2: W - margin.right, y1: yy, y2: yy, stroke: h.color, 'stroke-dasharray': '6 4', 'stroke-width': 1.5 }, svg);
+    const tx = svgEl('text', { x: W - margin.right - 4, y: yy - 4, 'text-anchor': 'end', 'font-size': 11, fill: h.color }, svg);
+    tx.textContent = h.label;
+  });
+  cfg.series.forEach((s) => {
+    const yy = s.right ? Y2 : Y;
+    const pts = s.data.map((d, i) => X(i).toFixed(1) + ',' + yy(d[1]).toFixed(1)).join(' ');
+    svgEl('polyline', { points: pts, fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
+  });
+  const overlay = svgEl('rect', { x: margin.left, y: margin.top, width: W - margin.left - margin.right, height: H - margin.top - margin.bottom, fill: 'transparent' }, svg);
+  overlay.addEventListener('mousemove', (event) => {
+    const rect = box.getBoundingClientRect();
+    const mx = (event.clientX - rect.left) * (W / rect.width);
+    let bi = 0, bd = 1e9;
+    for (let i = 0; i < n; i++) { const d = Math.abs(X(i) - mx); if (d < bd) { bd = d; bi = i; } }
+    const lines = [Object.assign(document.createElement('div'), { className: 'clo-tip-h', textContent: fmtDate(dates[bi]) })];
+    cfg.series.forEach((s) => {
+      const d = s.data[bi];
+      if (d) lines.push(Object.assign(document.createElement('div'), { textContent: s.name + ': ' + s.fmt(d[1]) }));
+    });
+    tip.replaceChildren(...lines);
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(0, event.offsetX + 12), box.clientWidth - tw - 4) + 'px';
+    tip.style.top = '8px';
+  });
+  overlay.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
+/* ---------- Render ---------- */
+function statusInfo() {
+  const ccc = SP.latest.ccc.value, hy = SP.latest.hy.value;
+  const st = SP.status;
+  const gc = SP.gaps.ccc, gh = SP.gaps.hy;
+  let txt;
+  if (st === 'triggered') {
+    const hit = [];
+    if (ccc > SP.triggers.ccc) hit.push('CCC ' + fmtPct(ccc) + ' > 13%');
+    if (hy > SP.triggers.hy) hit.push('HY ' + fmtPct(hy) + ' > 3.5%');
+    txt = 'Trigger hit: ' + hit.join(' and ') + '. Per Wolfe, credit stress is spreading to stocks.';
+  } else if (st === 'watch') {
+    const bits = [];
+    if (gc != null && gc <= SP.close_band.ccc) bits.push('CCC ' + fmtGap(gc) + ' from 13%');
+    if (gh != null && gh <= SP.close_band.hy) bits.push('HY ' + fmtGap(gh) + ' from 3.5%');
+    txt = 'Getting close: ' + bits.join(', ') + '.';
+  } else if (st === 'calm') {
+    txt = 'All calm: CCC ' + fmtGap(gc) + ' below 13%, HY ' + fmtGap(gh) + ' below 3.5%.';
+  } else {
+    txt = 'Data unavailable \u2014 check back after the next refresh.';
+  }
+  return { st: st === 'unknown' ? 'watch' : st, label: st.toUpperCase(), txt: txt };
+}
+
+function drawGauge(prefix, key, trigger, unit) {
+  const v = SP.latest[key].value;
+  const hist = SP.series[key].history.map((d) => d[1]);
+  const lo = Math.min.apply(null, [trigger - 5].concat(hist));
+  const hi = trigger + 1;
+  const pos = (x) => Math.max(0, Math.min(100, (x - lo) / (hi - lo) * 100));
+  const bar = document.getElementById(prefix + '-bar');
+  bar.replaceChildren();
+  const dz = document.createElement('div');
+  dz.className = 'gauge-danger';
+  dz.style.left = pos(trigger) + '%';
+  const wz = document.createElement('div');
+  wz.className = 'gauge-warnzone';
+  wz.style.left = pos(trigger - SP.close_band[key]) + '%';
+  wz.style.width = (pos(trigger) - pos(trigger - SP.close_band[key])) + '%';
+  const mk = document.createElement('div');
+  mk.className = 'gauge-marker';
+  mk.style.left = 'calc(' + pos(v) + '% - 1px)';
+  bar.append(dz, wz);
+  if (v != null) bar.append(mk);
+  const sc = document.getElementById(prefix + '-scale');
+  sc.replaceChildren();
+  [lo, trigger, hi].forEach((x, i) => {
+    const s = document.createElement('span');
+    s.textContent = (i === 1 ? 'trigger ' : '') + fmtPct(x);
+    if (i === 1) s.style.color = 'var(--bad)';
+    sc.appendChild(s);
+  });
+  const num = document.getElementById(prefix + '-num');
+  num.textContent = v == null ? '\u2014' : fmtPct(v);
+  num.className = 'clo-tile-num';
+  num.style.color = '';
+  if (v != null) {
+    if (v > trigger) num.className += ' clo-dn';
+    else if (v < trigger - SP.close_band[key]) num.className += ' clo-up';
+    else num.style.color = 'var(--warn)';
+  }
+  const gap = trigger - v;
+  document.getElementById(prefix + '-sub').textContent =
+    v == null ? '\u2014' : (gap > 0 ? fmtGap(gap) + ' below trigger' : 'TRIGGER HIT by ' + fmtGap(gap)) +
+    ' \u00B7 watch band \u2265 ' + fmtPct(trigger - SP.close_band[key]);
+}
+
+function drawAll() {
+  const info = statusInfo();
+  const pill = document.getElementById('status-pill');
+  pill.textContent = info.label;
+  pill.className = 'status-pill ' + info.st;
+  document.getElementById('status-text').textContent = info.txt;
+  const dates = [SP.latest.ccc.date, SP.latest.hy.date].filter(Boolean).sort();
+  document.getElementById('data-asof').textContent = dates.length ? fmtDate(dates[dates.length - 1]) + ' (FRED, daily)' : '\u2014';
+  const ccc = SP.latest.ccc.value, hy = SP.latest.hy.value;
+  document.getElementById('takeaway').textContent =
+    ccc == null ? '\u2014' : 'CCC at ' + fmtPct(ccc) + ' (' + fmtGap(SP.gaps.ccc) + ' from 13%); HY at ' + fmtPct(hy) + ' (' + fmtGap(SP.gaps.hy) + ' from 3.5%).';
+  drawGauge('g-ccc', 'ccc', SP.triggers.ccc);
+  drawGauge('g-hy', 'hy', SP.triggers.hy);
+  drawLines(document.getElementById('chart1'), {
+    fmtY: (t) => _n2(t, 0) + '%',
+    series: [
+      { name: 'CCC OAS', color: '#f27070', fmt: fmtPct, data: SP.series.ccc.history },
+      { name: 'HY OAS', color: '#f5b942', fmt: fmtPct, data: SP.series.hy.history },
+      { name: 'BBB OAS', color: '#8f9a9b', fmt: fmtPct, data: SP.series.bbb.history }
+    ],
+    hlines: [
+      { val: SP.triggers.ccc, color: '#f27070', label: 'CCC trigger 13%' },
+      { val: SP.triggers.hy, color: '#f5b942', label: 'HY trigger 3.5%' }
+    ]
+  });
+  drawLines(document.getElementById('chart2'), {
+    dual: true, fmtY: (t) => _n2(t, 0) + '%', fmtY2: (t) => Math.round(t).toLocaleString('en-US'),
+    series: [
+      { name: 'CCC OAS', color: '#f27070', fmt: fmtPct, data: SP.series.ccc.history },
+      { name: 'S&P 500', color: '#6aa8ff', fmt: (v) => Math.round(v).toLocaleString('en-US'), data: SP.series.spx.history, right: true }
+    ]
+  });
+  const tb = document.querySelector('#tbl tbody');
+  const rows = [
+    { k: 'ccc', trig: SP.triggers.ccc },
+    { k: 'hy', trig: SP.triggers.hy },
+    { k: 'bbb', trig: null },
+    { k: 'spx', trig: null }
+  ];
+  tb.replaceChildren(...rows.map((r) => {
+    const L = SP.latest[r.k];
+    const tr = document.createElement('tr');
+    const cells = [
+      SP.series[r.k].label,
+      L.value == null ? '\u2014' : (r.k === 'spx' ? Math.round(L.value).toLocaleString('en-US') : fmtPct(L.value)),
+      fmtDate(L.date) || '\u2014',
+      fmtChg(L.chg_5d_pct),
+      fmtChg(L.chg_1m_pct),
+      r.trig == null ? '\u2014' : fmtPct(r.trig),
+      r.trig == null || L.value == null ? '\u2014' : fmtPp(r.trig - L.value)
+    ];
+    cells.forEach((c, i) => {
+      const td = document.createElement('td');
+      td.textContent = c;
+      if (i === 3 || i === 4) td.className = signClass(L[i === 3 ? 'chg_5d_pct' : 'chg_1m_pct']);
+      if (i === 6 && r.trig != null && L.value != null) td.className = (r.trig - L.value) < 0 ? 'clo-dn' : ((r.trig - L.value) <= SP.close_band[r.k] ? '' : 'clo-up');
+      tr.appendChild(td);
+    });
+    return tr;
+  }));
+  document.getElementById('srcnote').textContent =
+    'Data: FRED — ' + ['ccc', 'hy', 'bbb', 'spx'].map((k) => SP.series[k].label + ' (' + SP.series[k].id + ')').join(', ') +
+    '. Refreshed every weekday morning by an automated job. Trigger levels from Josh Wolfe (@wolfejosh), Oct 12 2026. ' +
+    'This page is fully self-contained \u2014 no external libraries, no API keys, works offline.';
+}
+
+/* ---------- Load ---------- */
+async function loadData() {
+  try {
+    const r = await fetch('spreads.json', { cache: 'no-store' });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.latest && j.series && j.latest.ccc) { SP = j; return true; }
+    }
+  } catch (e) { /* fall through to embedded */ }
+  if (typeof EMBED !== 'undefined' && EMBED) { SP = EMBED; return true; }
+  return false;
+}
+const btnRefresh = document.getElementById('btn-refresh');
+const refreshStatus = document.getElementById('refresh-status');
+btnRefresh.addEventListener('click', async () => {
+  btnRefresh.disabled = true;
+  btnRefresh.textContent = 'Refreshing\u2026';
+  refreshStatus.textContent = '';
+  const before = SP && SP.latest.ccc ? SP.latest.ccc.value : null;
+  const ok = await loadData();
+  btnRefresh.disabled = false;
+  btnRefresh.textContent = 'Refresh';
+  if (!ok) { refreshStatus.textContent = 'Could not load data.'; return; }
+  drawAll();
+  const after = SP.latest.ccc.value;
+  refreshStatus.textContent = (before != null && after !== before) ? 'Updated just now.' : 'Already up to date.';
+});
+loadData().then((ok) => { if (ok) drawAll(); else document.getElementById('takeaway').textContent = 'Could not load data.'; });
+</script>
+</body>
+</html>
