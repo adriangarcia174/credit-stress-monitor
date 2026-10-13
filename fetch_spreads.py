@@ -40,11 +40,13 @@ TODAY = date.today().isoformat()
 def fetch_one(page, sid):
     url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + sid
     try:
-        # Usually FRED serves the CSV as a file download...
-        with page.expect_download(timeout=30000) as dl_info:
-            page.goto(url, timeout=30000)
+        # FRED serves the CSV as a file download. page.goto() raises
+        # "Download is starting" when navigation turns into a download, so
+        # trigger it via location.href inside expect_download instead.
+        with page.expect_download(timeout=60000) as dl_info:
+            page.evaluate("(url) => { window.location.href = url; }", url)
         text = open(dl_info.value.path()).read()
-    except Exception:  # noqa: BLE001 - ...otherwise it renders as page text
+    except Exception:  # noqa: BLE001 - didn't download; maybe it rendered as a page
         page.goto(url, timeout=60000)
         text = page.evaluate("() => document.body.innerText")
     if "DATE," not in text:
