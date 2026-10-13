@@ -4,6 +4,11 @@ Pulls ICE BofA option-adjusted spreads and the S&P 500 from FRED's public CSV
 endpoint (no API key needed) and writes spreads.json with ~2 years of daily
 history, the latest values, distance to Wolfe's triggers, and a status.
 
+IMPORTANT: FRED's CDN bot-gates non-browser HTTP clients from datacenter IPs
+(curl and Python's http stack hang forever), but serves real browsers fine.
+So the CSVs are fetched through a headless Chromium (Playwright) instead of
+urllib/requests/curl. Playwright is installed by the GitHub workflow.
+
 Triggers (Josh Wolfe, @wolfejosh, 2026-10-12): CCC OAS > 13% and HY OAS > 3.5%
 signal credit stress spreading to stocks. "Watch" = within the close band.
 """
@@ -11,8 +16,6 @@ import csv
 import io
 import json
 import os
-import subprocess
-import time
 from datetime import date, timedelta
 
 SERIES = {
@@ -34,35 +37,40 @@ DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spreads.js
 TODAY = date.today().isoformat()
 
 
-def fetch_csv(series_id, tries=4):
-    # NOTE: FRED's CDN stalls Python's http.client (urllib/requests) on read;
-    # curl handles the same URL fine, so shell out to it. curl exists on the
-    # GitHub Actions ubuntu runner too. Retries with backoff: FRED throttles
-    # rapid repeat hits from one IP.
-    url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + series_id
-    last_err = None
-    for attempt in range(tries):
-        if attempt:
-            time.sleep(5 * attempt)
+def fetch_csv_texts(series_ids):
+    """Fetch FRED CSVs via headless Chromium (see module docstring for why)."""
+    from playwright.sync_api import sync_playwright
+    texts = {}
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
         try:
-            p = subprocess.run(
-                ["curl", "-s", "--http1.1", "--max-time", "45", "-A", "Mozilla/5.0", url],
-                capture_output=True, text=True, timeout=120)
-            if p.returncode != 0:
-                raise RuntimeError(f"curl rc={p.returncode}: {p.stderr.strip()[:120]}")
-            rows = []
-            for row in csv.DictReader(io.StringIO(p.stdout)):
-                d = row["DATE"].strip()
-                v = row[series_id].strip()
-                if v and v != ".":
-                    rows.append([d, float(v)])
-            if not rows:
-                raise RuntimeError("empty CSV for " + series_id)
-            return rows
-        except Exception as e:  # noqa: BLE001 - retry, then let the caller handle it
-            last_err = e
-            print(f" - {series_id}: attempt {attempt + 1} failed ({type(e).__name__})")
-    raise RuntimeError(f"{series_id} failed after {tries} tries: {last_err}")
+            page = browser.new_page()
+            page.goto("https://fred.stlouisfed.org/", timeout=90000)
+            for sid in series_ids:
+                url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + sid
+                try:
+                    texts[sid] = page.evaluate("""async (url) => {
+                        const r = await fetch(url);
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return await r.text();
+                    }""", url, timeout=90000)
+                except Exception as e:  # noqa: BLE001 - one bad series must not kill the run
+                    print(f" - {sid}: browser fetch failed ({type(e).__name__}: {str(e)[:100]})")
+        finally:
+            browser.close()
+    return texts
+
+
+def parse_csv(series_id, text):
+    rows = []
+    for row in csv.DictReader(io.StringIO(text)):
+        d = row["DATE"].strip()
+        v = row[series_id].strip()
+        if v and v != ".":
+            rows.append([d, float(v)])
+    if not rows:
+        raise RuntimeError("empty CSV for " + series_id)
+    return rows
 
 
 def pct_change(history, days_back):
@@ -86,12 +94,17 @@ def status_of(ccc, hy):
 
 def main():
     cutoff = (date.today() - timedelta(days=HISTORY_DAYS)).isoformat()
+    try:
+        texts = fetch_csv_texts(list(SERIES.values()))
+    except Exception as e:  # noqa: BLE001 - keep the existing file on total failure
+        print(f" - browser fetch failed ({type(e).__name__}): {str(e)[:150]}")
+        texts = {}
     series = {}
     for key, sid in SERIES.items():
         try:
-            rows = [r for r in fetch_csv(sid) if r[0] >= cutoff]
+            rows = [r for r in parse_csv(sid, texts[sid]) if r[0] >= cutoff]
         except Exception as e:  # noqa: BLE001 - one bad series must not kill the run
-            print(f" - {key} ({sid}): fetch failed ({type(e).__name__})")
+            print(f" - {key} ({sid}): failed ({type(e).__name__})")
             rows = []
         series[key] = {"id": sid, "label": LABELS[key], "history": rows}
 
@@ -127,9 +140,13 @@ def main():
     with open(DATA_FILE, "w") as fh:
         json.dump(out, fh)
         fh.write("\n")
+
+    def fgap(g):
+        return f"{g:+.2f}pp" if g is not None else "n/a"
+
     print(f"Spreads refresh {TODAY}: status={out['status']}, "
-          f"CCC={ccc_v} (gap {out['gaps']['ccc']:+.2f}pp), "
-          f"HY={hy_v} (gap {out['gaps']['hy']:+.2f}pp)")
+          f"CCC={ccc_v} (gap {fgap(out['gaps']['ccc'])}), "
+          f"HY={hy_v} (gap {fgap(out['gaps']['hy'])})")
 
 
 if __name__ == "__main__":
