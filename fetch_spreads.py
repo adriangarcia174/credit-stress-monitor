@@ -1,21 +1,21 @@
 """Daily credit-spread fetcher for the Credit Stress Monitor.
 
-Pulls ICE BofA option-adjusted spreads and the S&P 500 from FRED's public CSV
-endpoint (no API key needed) and writes spreads.json with ~2 years of daily
-history, the latest values, distance to Wolfe's triggers, and a status.
+Pulls ICE BofA option-adjusted spreads and the S&P 500 from the FRED API
+(api.stlouisfed.org) and writes spreads.json with ~2 years of daily history,
+the latest values, distance to Wolfe's triggers, and a status.
 
-IMPORTANT: FRED's CDN bot-gates non-browser HTTP clients from datacenter IPs
-(curl and Python's http stack hang forever), but serves real browsers fine.
-So the CSVs are fetched through a headless Chromium (Playwright) instead of
-urllib/requests/curl. Playwright is installed by the GitHub workflow.
+Requires a free FRED API key in the FRED_API_KEY environment variable
+(the GitHub workflow injects it from the FRED_API_KEY repo secret).
+FRED's website CDN bot-blocks datacenter IPs, so the keyless CSV endpoint
+cannot be fetched from automation — the API is the supported path.
 
 Triggers (Josh Wolfe, @wolfejosh, 2026-10-12): CCC OAS > 13% and HY OAS > 3.5%
 signal credit stress spreading to stocks. "Watch" = within the close band.
 """
-import csv
-import io
 import json
 import os
+import urllib.parse
+import urllib.request
 from datetime import date, timedelta
 
 SERIES = {
@@ -35,53 +35,31 @@ CLOSE_BAND = {"ccc": 0.5, "hy": 0.25}  # "getting close" = within this (pp) of t
 HISTORY_DAYS = 730
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spreads.json")
 TODAY = date.today().isoformat()
+API_KEY = os.environ.get("FRED_API_KEY", "").strip()
 
 
-def fetch_one(page, sid):
-    url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + sid
-    try:
-        # FRED serves the CSV as a file download. page.goto() raises
-        # "Download is starting" when navigation turns into a download, so
-        # trigger it via location.href inside expect_download instead.
-        with page.expect_download(timeout=60000) as dl_info:
-            page.evaluate("(url) => { window.location.href = url; }", url)
-        text = open(dl_info.value.path()).read()
-    except Exception:  # noqa: BLE001 - didn't download; maybe it rendered as a page
-        page.goto(url, timeout=60000)
-        text = page.evaluate("() => document.body.innerText")
-    if "DATE," not in text:
-        raise RuntimeError("unexpected content")
-    return text
-
-
-def fetch_csv_texts(series_ids):
-    """Fetch FRED CSVs via headless Chromium (see module docstring for why)."""
-    from playwright.sync_api import sync_playwright
-    texts = {}
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        try:
-            page = browser.new_page()
-            page.goto("https://fred.stlouisfed.org/", timeout=90000)
-            for sid in series_ids:
-                try:
-                    texts[sid] = fetch_one(page, sid)
-                except Exception as e:  # noqa: BLE001 - one bad series must not kill the run
-                    print(f" - {sid}: browser fetch failed ({type(e).__name__}: {str(e)[:100]})")
-        finally:
-            browser.close()
-    return texts
-
-
-def parse_csv(series_id, text):
+def fetch_observations(series_id, start):
+    """Fetch daily observations from the FRED API. Returns [[date, value], ...]."""
+    qs = urllib.parse.urlencode({
+        "series_id": series_id,
+        "api_key": API_KEY,
+        "file_type": "json",
+        "observation_start": start,
+        "sort_order": "asc",
+    })
+    req = urllib.request.Request(
+        "https://api.stlouisfed.org/fred/series/observations?" + qs,
+        headers={"User-Agent": "credit-stress-monitor/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = json.load(resp)
     rows = []
-    for row in csv.DictReader(io.StringIO(text)):
-        d = row["DATE"].strip()
-        v = row[series_id].strip()
+    for ob in payload.get("observations", []):
+        v = ob["value"].strip()
         if v and v != ".":
-            rows.append([d, float(v)])
+            rows.append([ob["date"], float(v)])
     if not rows:
-        raise RuntimeError("empty CSV for " + series_id)
+        raise RuntimeError("no observations returned for " + series_id)
     return rows
 
 
@@ -105,18 +83,18 @@ def status_of(ccc, hy):
 
 
 def main():
+    if not API_KEY:
+        print("Spreads refresh {}: FRED_API_KEY is not set - keeping existing data file.".format(TODAY))
+        print("Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html "
+              "and add it as the FRED_API_KEY repo secret.")
+        return
     cutoff = (date.today() - timedelta(days=HISTORY_DAYS)).isoformat()
-    try:
-        texts = fetch_csv_texts(list(SERIES.values()))
-    except Exception as e:  # noqa: BLE001 - keep the existing file on total failure
-        print(f" - browser fetch failed ({type(e).__name__}): {str(e)[:150]}")
-        texts = {}
     series = {}
     for key, sid in SERIES.items():
         try:
-            rows = [r for r in parse_csv(sid, texts[sid]) if r[0] >= cutoff]
+            rows = fetch_observations(sid, cutoff)
         except Exception as e:  # noqa: BLE001 - one bad series must not kill the run
-            print(f" - {key} ({sid}): failed ({type(e).__name__})")
+            print(f" - {key} ({sid}): failed ({type(e).__name__}: {str(e)[:120]})")
             rows = []
         series[key] = {"id": sid, "label": LABELS[key], "history": rows}
 
@@ -136,7 +114,6 @@ def main():
         if os.path.exists(DATA_FILE):
             print(f"Spreads refresh {TODAY}: CCC/HY fetch failed - keeping existing data file.")
             return
-        # no existing file and no data: write what we have so the page has something
     out = {
         "asof": TODAY,
         "triggers": TRIGGERS,
